@@ -1,3 +1,4 @@
+# encoding: UTF-8
 =begin
 
 BETTERCAP
@@ -10,6 +11,8 @@ This project is released under the GPL 3 license.
 
 =end
 module BetterCap
-  VERSION = '1.1.1'
+  # Current version of bettercap.
+  VERSION = '1.3.6b'
+  # Program banner.
   BANNER = File.read( File.dirname(__FILE__) + '/banner' ).gsub( '#VERSION#', "v#{VERSION}")
 end

@@ -1,3 +1,4 @@
+# encoding: UTF-8
 =begin
 
 BETTERCAP
@@ -9,8 +10,7 @@ Blog   : http://www.evilsocket.net/
 This project is released under the GPL 3 license.
 
 =end
-
-# class used to distinghuish between handled and unhandled exceptions
 module BetterCap
+  # Class used to distinghuish between handled and unhandled exceptions.
   class Error < StandardError; end
 end

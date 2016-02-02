@@ -1,3 +1,4 @@
+# encoding: UTF-8
 =begin
 
 BETTERCAP
@@ -9,11 +10,15 @@ Blog   : http://www.evilsocket.net/
 This project is released under the GPL 3 license.
 
 =end
-require 'bettercap/sniffer/parsers/base'
 
-class FtpParser < BaseParser
-    def initialize
-        @filters = [ /(USER|PASS)\s+.+/ ]
-        @name = 'FTP'
-    end
+module BetterCap
+module Parsers
+# FTP authentication parser.
+class Ftp < Base
+  def initialize
+    @filters = [ /(USER|PASS)\s+.+/ ]
+    @name = 'FTP'
+  end
+end
+end
 end

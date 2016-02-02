@@ -1,3 +1,4 @@
+# encoding: UTF-8
 =begin
 
 BETTERCAP
@@ -9,11 +10,15 @@ Blog   : http://www.evilsocket.net/
 This project is released under the GPL 3 license.
 
 =end
-require 'bettercap/sniffer/parsers/base'
 
-class IrcParser < BaseParser
-    def initialize
-        @filters = [ /NICK\s+.+/, /NS IDENTIFY\s+.+/, /nickserv :identify\s+.+/ ]
-        @name = 'IRC'
-    end
+module BetterCap
+module Parsers
+# IRC protocol parser.
+class Irc < Base
+  def initialize
+    @filters = [ /NICK\s+.+/, /NS IDENTIFY\s+.+/, /nickserv :identify\s+.+/ ]
+    @name = 'IRC'
+  end
+end
+end
 end

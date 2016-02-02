@@ -1,3 +1,4 @@
+# encoding: UTF-8
 =begin
 
 BETTERCAP
@@ -9,11 +10,15 @@ Blog   : http://www.evilsocket.net/
 This project is released under the GPL 3 license.
 
 =end
-require 'bettercap/sniffer/parsers/base'
 
-class MailParser < BaseParser
-    def initialize
-        @filters = [ /(\d+ )?(auth|authenticate) ([a-z\-_0-9]+)/i ]
-        @name = 'MAIL'
-    end
+module BetterCap
+module Parsers
+# POP/IMAP authentication parser.
+class Mail < Base
+  def initialize
+    @filters = [ /(\d+ )?(auth|authenticate) ([a-z\-_0-9]+)/i ]
+    @name = 'MAIL'
+  end
+end
+end
 end

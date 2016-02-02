@@ -1,4 +1,5 @@
 #!/usr/bin/env ruby
+# encoding: UTF-8
 
 =begin
 
@@ -18,192 +19,46 @@ begin
   puts BetterCap::BANNER.green.bold
   puts "\n\n\n"
 
-  ctx = Context.get
+  # We need this in order to report unhandled exceptions.
+  original_argv = ARGV.clone
 
-  OptionParser.new do |opts|
-    opts.banner = "Usage: #{$0} [options]"
+  # Create global context, parse command line arguments and perform basic
+  # error checking.
+  ctx = BetterCap::Options.parse!
 
-    opts.on( '-I', '--interface IFACE', 'Network interface name - default: ' + ctx.options[:iface] ) do |v|
-      ctx.options[:iface] = v
-    end
+  ctx.start!
 
-    opts.on( '-S', '--spoofer NAME', 'Spoofer module to use, available: ' + SpooferFactory.available.join(', ') + ' - default: ' + ctx.options[:spoofer] ) do |v|
-      ctx.options[:spoofer] = v
-    end
-
-    opts.on( '-T', '--target ADDRESS', 'Target IP address, if not specified the whole subnet will be targeted.' ) do |v|
-      ctx.options[:target] = v
-    end
-
-    opts.on( '-O', '--log LOG_FILE', 'Log all messages into a file, if not specified the log messages will be only print into the shell.' ) do |v|
-      ctx.options[:logfile] = v
-    end
-
-    opts.on( '-D', '--debug', 'Enable debug logging.' ) do
-      ctx.options[:debug] = true
-    end
-
-    opts.on( '-L', '--local', 'Parse packets coming from/to the address of this computer ( NOTE: Will set -X to true ), default to false.' ) do
-      ctx.options[:local] = true
-      ctx.options[:sniffer] = true
-    end
-
-    opts.on( '-X', '--sniffer', 'Enable sniffer.' ) do
-      ctx.options[:sniffer] = true
-    end
-
-    opts.on( '--sniffer-pcap FILE', 'Save all packets to the specified PCAP file ( will enable sniffer ).' ) do |v|
-      ctx.options[:sniffer] = true
-      ctx.options[:sniffer_pcap] = File.expand_path v
-    end
-
-    opts.on( '--sniffer-filter EXPRESSION', 'Configure the sniffer to use this BPF filter ( will enable sniffer ).' ) do |v|
-      ctx.options[:sniffer] = true
-      ctx.options[:sniffer_filter] = v
-    end
-
-    opts.on( '-P', '--parsers PARSERS', 'Comma separated list of packet parsers to enable, "*" for all ( NOTE: Will set -X to true ), available: ' + ParserFactory.available.join(', ') + ' - default: *' ) do |v|
-      ctx.options[:sniffer] = true
-      ctx.options[:parsers] = ParserFactory.from_cmdline(v)
-    end
-
-    opts.on( '--no-discovery', 'Do not actively search for hosts, just use the current ARP cache, default to false.' ) do
-      ctx.options[:arpcache] = true
-    end
-
-    opts.on( '--proxy', 'Enable HTTP proxy and redirects all HTTP requests to it, default to false.' ) do
-      ctx.options[:proxy] = true
-    end
-
-    opts.on( '--proxy-port PORT', 'Set HTTP proxy port, default to ' + ctx.options[:proxy_port].to_s + ' .' ) do |v|
-      ctx.options[:proxy] = true
-      ctx.options[:proxy_port] = v.to_i
-    end
-
-    opts.on( '--proxy-module MODULE', 'Ruby proxy module to load.' ) do |v|
-      ctx.options[:proxy] = true
-      ctx.options[:proxy_module] = File.expand_path v
-    end
-
-    opts.on( '--httpd', 'Enable HTTP server, default to false.' ) do
-      ctx.options[:httpd] = true
-    end
-
-    opts.on( '--httpd-port PORT', 'Set HTTP server port, default to ' + ctx.options[:httpd_port].to_s +  '.' ) do |v|
-      ctx.options[:httpd] = true
-      ctx.options[:httpd_port] = v.to_i
-    end
-
-    opts.on( '--httpd-path PATH', 'Set HTTP server path, default to ' + ctx.options[:httpd_path] +  '.' ) do |v|
-      ctx.options[:httpd] = true
-      ctx.options[:httpd_path] = v
-    end
-
-    opts.on('-h', '--help', 'Display the available options.') do
-      puts opts
-      puts "\nExamples:\n".bold
-      puts " - Sniffer / Credentials Harvester\n".bold
-      puts "  Default sniffer mode, all parsers enabled:\n\n"
-      puts "    sudo bettercap -X\n".bold
-      puts "  Enable sniffer and load only specified parsers:\n\n"
-      puts "    sudo bettercap -X -P \"FTP,HTTPAUTH,MAIL,NTLMSS\"\n".bold
-      puts "  Enable sniffer + all parsers and parse local traffic as well:\n\n"
-      puts "    sudo bettercap -X -L\n".bold
-      puts " - Transparent Proxy\n".bold
-      puts "  Enable proxy on default ( 8080 ) port with no modules ( quite useless ):\n\n"
-      puts "    sudo bettercap --proxy\n".bold
-      puts "  Enable proxy and use a custom port:\n\n"
-      puts "    sudo bettercap --proxy --proxy-port=8081\n".bold
-      puts "  Enable proxy and load the module example_proxy_module.rb:\n\n"
-      puts "    sudo bettercap --proxy --proxy-module=example_proxy_module.rb\n".bold
-      puts "  Disable spoofer and enable proxy ( stand alone proxy mode ):\n\n"
-      puts "    sudo bettercap -S NONE --proxy".bold
-      exit
-    end
-  end.parse!
-
-  raise BetterCap::Error, 'This software must run as root.' unless Process.uid == 0
-
-  Logger.debug_enabled = true unless !ctx.options[:debug]
-
-  Logger.logfile = ctx.options[:logfile]
-
-  ctx.update_network
-
-  if ctx.options[:target].nil?
-    Logger.info "Targeting the whole subnet #{ctx.network.to_range} ..."
-
-    ctx.start_discovery_thread
-  else
-    raise BetterCap::Error, "Invalid target '#{ctx.options[:target]}'" unless Network.is_ip? ctx.options[:target]
-
-    ctx.targets = [ Target.new( ctx.options[:target], nil ) ]
-  end
-
-  ctx.spoofer = SpooferFactory.get_by_name( ctx.options[:spoofer] )
-
-  Logger.info "  Local : #{ctx.iface[:ip_saddr]} ( #{ctx.iface[:eth_saddr]} )"
-
-  Logger.debug "Module: #{ctx.options[:spoofer]}"
-
-  ctx.spoofer.start
-
-  if ctx.options[:proxy]
-    if ctx.options[:sniffer] and ( ctx.options[:parsers].include?'*' or ctx.options[:parsers].include?'URL' )
-      Logger.warn "WARNING: Both HTTP transparent proxy and URL parser are enabled, you're gonna see duplicated logs."
-    end
-
-    ctx.firewall.add_port_redirection( ctx.options[:iface], 'TCP', 80, ctx.iface[:ip_saddr], ctx.options[:proxy_port] )
-
-    if not ctx.options[:proxy_module].nil?
-      require ctx.options[:proxy_module]
-
-      Proxy::Module.register_modules
-
-      raise BetterCap::Error, "#{ctx.options[:proxy_module]} is not a valid bettercap proxy module." unless !Proxy::Module.modules.empty?
-    end
-
-    ctx.proxy = Proxy::Proxy.new( ctx.iface[:ip_saddr], ctx.options[:proxy_port] ) do |request,response|
-      if Proxy::Module.modules.empty?
-        Logger.warn 'WARNING: No proxy module loaded, skipping request.'
-      else
-        # loop each loaded module and execute if enabled
-        Proxy::Module.modules.each do |mod|
-          if mod.enabled?
-            mod.on_request request, response
-          end
-        end
-      end
-    end
-
-    ctx.proxy.start
-  end
-
-  if ctx.options[:httpd]
-    ctx.httpd = HTTPD::Server.new( ctx.options[:httpd_port], ctx.options[:httpd_path] )
-    ctx.httpd.start
-  end
-
-  if ctx.options[:sniffer]
-    Sniffer.start ctx
-  else
-    Logger.warn 'WARNING: Sniffer module was NOT enabled ( -X argument ), this will cause the MITM to run but no data to be collected.'
-
-    loop do
-      sleep 1
-    end
+  loop do
+    sleep 10
   end
 
 rescue SystemExit, Interrupt
-  Logger.write "\n"
+  BetterCap::Logger.raw "\n"
+
+rescue OptionParser::InvalidOption,
+       OptionParser::AmbiguousOption,
+       OptionParser::MissingArgument => e
+  BetterCap::Logger.error "'#{e.message.capitalize}', verify your command line arguments executing 'bettercap --help'."
 
 rescue BetterCap::Error => e
-  Logger.error e.message
+  BetterCap::Logger.error e.message
 
 rescue Exception => e
-  Logger.error e.message
-  Logger.error e.backtrace.join("\n")
+  puts "\n\n"
+  BetterCap::Logger.error "Oooops, seems like something weird occurred, please copy paste the following output " \
+                          "and open a new issue on https://github.com/evilsocket/bettercap/issues :\n"
+
+  BetterCap::Logger.error "Platform          : #{RUBY_PLATFORM}"
+  BetterCap::Logger.error "Ruby Version      : #{RUBY_VERSION}"
+  BetterCap::Logger.error "BetterCap Version : #{BetterCap::VERSION}"
+  BetterCap::Logger.error "Command Line      : #{original_argv.join(" ")}"
+  BetterCap::Logger.error "Exception         : #{e.class}"
+  BetterCap::Logger.error "Message           : #{e.message}"
+  BetterCap::Logger.error "Backtrace         :\n\n    #{e.backtrace.join("\n    ")}\n"
 
 ensure
+  # Make sure all the messages on the logger queue are printed.
+  BetterCap::Logger.wait!
+
   ctx.finalize unless ctx.nil?
 end
